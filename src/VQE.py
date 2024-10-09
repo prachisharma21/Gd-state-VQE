@@ -6,8 +6,12 @@ from circuit_builder import CircuitBuilder
 from model_hamiltonian import *
 from exact_diagonalization import *
 from helper import QSimulator
+import matplotlib.pyplot as plt
 
 
+# Global definitions
+num_params = 3  # number of parameters for each layer
+num_layers = 2  # number of layers for the VQE ansatz
 
 # Here VQE is done with SV simulator 
 def VQE_parameterized_circuit_sv(params =[],backend = FakeQuitoV2(),initial_layout = [0, 1, 2, 3, 4], num_layers = 1):
@@ -76,8 +80,9 @@ def main():
     bonds_Quito = [[0, 1],[1, 2],[1, 3],[3, 4]]
     # there are three parameters for each layer in this VQE HVA ansatz 
     num_params = 3 
+
     # number of layers for HVA ansatz 
-    num_layers = 1
+    num_layers = 2
 
     # this is not needed for the time being
     # optimized parameters for the VQE step as used in the paper
@@ -112,8 +117,62 @@ def main():
     
     # below we printed the exact ground state energy of the hamiltonian 
     print(f"Exact ground state energy: {exact_gd_state_energy(model_input,backend.num_qubits,bonds)}")
+    
+    # Calculate the difference between the exact ground state energy and the lowest calculated energy
+    energy_difference = lowest_energy - exact_gd_state_energy(model_input, backend.num_qubits, bonds) 
+    print(f"The difference between the exact ground state energy and the calculated lowest energy is: {energy_difference}")
 
+def scan_hx_hz(backend, bonds):
+    # Define the ranges for hx and hz
+    hx_values = np.linspace(-2, 2, 10)  # Values for hx
+    hz_values = np.linspace(-2, 2, 10)  # Values for hz
+
+    # Create a grid to store the energy differences
+    energy_diff_grid = np.zeros((len(hz_values), len(hx_values)))
+
+    # Loop over hx and hz values
+    for i, hx in enumerate(hx_values):
+        for j, hz in enumerate(hz_values):
+            # Set the model input for the current hx and hz
+            J = -1.0  # J is kept constant as -1.0
+            model_input = (J, hx, hz)
+
+            # Initial random parameters for VQE
+            init_params = np.random.uniform(-np.pi/3, np.pi/3, num_layers*num_params)
+
+            # Perform the VQE optimization
+            optimal_params, lowest_energy = VQE_optimization_Step(init_params, backend=backend, initial_layout=[i for i in range(backend.num_qubits)], bonds=bonds, num_layers=num_layers, model_input=model_input)
+
+            # Compute the exact ground state energy
+            exact_energy = exact_gd_state_energy(model_input, backend.num_qubits, bonds)
+
+            # Calculate the energy difference
+            energy_diff = exact_energy - lowest_energy
+
+            # Store the energy difference in the grid
+            energy_diff_grid[j, i] = energy_diff
+
+    # Create the plot
+    plt.figure(figsize=(6, 6))
+    plt.imshow(energy_diff_grid, extent=[hx_values.min(), hx_values.max(), hz_values.min(), hz_values.max()],
+               origin='lower', cmap='jet', aspect='auto')
+
+    # Add color bar and labels
+    plt.colorbar(label='Energy Difference')
+    plt.xlabel('hx')
+    plt.ylabel('hz')
+    plt.title('Energy Difference as function of hx and hz')
+
+    # Show the plot
+    plt.show()
+
+
+# Global definitions for backend and bonds
+backend = FakeQuitoV2()  # FakeGuadalupeV2()
+bonds = [[0, 1], [1, 2], [1, 3], [3, 4]]  
 
 if __name__ == "__main__":
     main()
+    scan_hx_hz(backend, bonds)  # Pass backend and bonds as arguments
+
 

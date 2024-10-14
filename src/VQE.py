@@ -1,4 +1,5 @@
 # Essential imports for the calculations
+from multiprocessing.pool import ThreadPool
 from qiskit.providers.fake_provider import FakeQuitoV2, FakeGuadalupeV2
 import scipy
 import numpy as np
@@ -7,11 +8,10 @@ from model_hamiltonian import *
 from exact_diagonalization import *
 from helper import QSimulator
 import matplotlib.pyplot as plt
+import concurrent.futures
+import matplotlib.colors as mcolors
 
 
-# Global definitions
-num_params = 3  # number of parameters for each layer
-num_layers = 2  # number of layers for the VQE ansatz
 
 # Here VQE is done with SV simulator 
 def VQE_parameterized_circuit_sv(params =[],backend = FakeQuitoV2(),initial_layout = [0, 1, 2, 3, 4], num_layers = 1):
@@ -46,7 +46,6 @@ def optimizer(init_params,backend = FakeQuitoV2(), initial_layout = [0, 1, 2, 3,
 def VQE_optimization_Step(init_params,backend = FakeGuadalupeV2(), initial_layout = [i for i in range(16)], bonds = [],num_layers = 1, model_input=()):
     res_vqe_sv = optimizer(init_params,backend,initial_layout, bonds, num_layers, model_input)
     if res_vqe_sv.success:
-        print('Optimization was successful!')
         optimum_params = res_vqe_sv.x
         lowest_fun = res_vqe_sv.fun
         
@@ -65,7 +64,10 @@ def exact_gd_state_energy(model_input, num_qubits,bonds):
     return get_lowest_states(exact_ham, 1)[0][0]
 
 def main():
-
+    # Benutzereingabe für die Anzahl der Schichten (num_layers)
+    from sys import argv
+    num_layers = int(argv[1])
+    print(f"Start optimizing with layer={num_layers}")
     # update the phase space parameter below 
     J = -1.0
     hx = -1.0
@@ -80,15 +82,6 @@ def main():
     bonds_Quito = [[0, 1],[1, 2],[1, 3],[3, 4]]
     # there are three parameters for each layer in this VQE HVA ansatz 
     num_params = 3 
-
-    # number of layers for HVA ansatz 
-    num_layers = 2
-
-    # this is not needed for the time being
-    # optimized parameters for the VQE step as used in the paper
-    # opt_params_Quito =  circuit_optimized_parameters("FakeQuitoV2")
-    # opt_params_Guad = circuit_optimized_parameters("FakeGuadalupeV2")
-    
 
     # Chosing random parameters to perform VQE
     init_params =  np.random.uniform(-np.pi/3, np.pi/3, num_layers*num_params)
@@ -114,65 +107,103 @@ def main():
 
     # Printing the optimized parameters and the corresponding lowest obtained energy 
     print(f"optimized parameters are {optimal_params} and obtained lowest energy is {lowest_energy}")  
-    
+        
     # below we printed the exact ground state energy of the hamiltonian 
     print(f"Exact ground state energy: {exact_gd_state_energy(model_input,backend.num_qubits,bonds)}")
     
     # Calculate the difference between the exact ground state energy and the lowest calculated energy
-    energy_difference = lowest_energy - exact_gd_state_energy(model_input, backend.num_qubits, bonds) 
+    energy_difference = lowest_energy - exact_gd_state_energy(model_input, backend.num_qubits, bonds)  
     print(f"The difference between the exact ground state energy and the calculated lowest energy is: {energy_difference}")
 
-def scan_hx_hz(backend, bonds):
-    # Define the ranges for hx and hz
-    hx_values = np.linspace(-2, 2, 10)  # Values for hx
-    hz_values = np.linspace(-2, 2, 10)  # Values for hz
+    # Call scan_hx_hz within main, passing necessary parameters
+    scan_hx_hz(backend, bonds, num_layers, num_params)
+
+
+
+
+
+def perform_vqe_multiple_times(backend, num_layers, num_params, model_input, bonds):
+    # Repeat the VQE optimization 10 times and return the smallest energy
+    min_lowest_energy = None
+    for repeat in range(10):
+        # Initial random parameters for VQE
+        init_params = np.random.uniform(-np.pi/3, np.pi/3, num_layers * num_params)
+
+        # Perform the VQE optimization
+        optimal_params, lowest_energy = VQE_optimization_Step(init_params, backend=backend, 
+                                                              initial_layout=[i for i in range(backend.num_qubits)], 
+                                                              bonds=bonds, num_layers=num_layers, 
+                                                              model_input=model_input)
+        # Track the minimum lowest_energy
+        if min_lowest_energy is None or lowest_energy < min_lowest_energy:
+            min_lowest_energy = lowest_energy
+    
+    return min_lowest_energy
+
+
+
+def scan_hx_hz(backend, bonds, num_layers, num_params):
+    # Define the ranges for hx and hz 
+    hx_values = np.linspace(0, 2, 10)  # Values for hx
+    hz_values = np.linspace(0, 2, 10)  # Values for hz
 
     # Create a grid to store the energy differences
     energy_diff_grid = np.zeros((len(hz_values), len(hx_values)))
+    
+    # Create another grid to store the exact energies
+    exact_energy_grid = np.zeros((len(hz_values), len(hx_values)))
 
-    # Loop over hx and hz values
+    J = -1.0  # J is kept constant
+
+    # First, calculate the exact energies for all hx and hz combinations
     for i, hx in enumerate(hx_values):
         for j, hz in enumerate(hz_values):
-            # Set the model input for the current hx and hz
-            J = -1.0  # J is kept constant as -1.0
             model_input = (J, hx, hz)
+            exact_energy_grid[j, i] = exact_gd_state_energy(model_input, backend.num_qubits, bonds)
 
-            # Initial random parameters for VQE
-            init_params = np.random.uniform(-np.pi/3, np.pi/3, num_layers*num_params)
+    # Now perform the VQE optimization in parallel
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        # Iterate over hx and hz in parallel
+        futures = []
+        for i, hx in enumerate(hx_values):
+            for j, hz in enumerate(hz_values):
+                model_input = (J, hx, hz)
+                # Submit each task for parallel execution
+                futures.append((i, j, executor.submit(perform_vqe_multiple_times, backend, num_layers, num_params, model_input, bonds)))
 
-            # Perform the VQE optimization
-            optimal_params, lowest_energy = VQE_optimization_Step(init_params, backend=backend, initial_layout=[i for i in range(backend.num_qubits)], bonds=bonds, num_layers=num_layers, model_input=model_input)
+        # Collect the results and compute the energy difference using the precomputed exact energy
+        for i, j, future in futures:
+            min_lowest_energy = future.result()
+            exact_energy = exact_energy_grid[j, i]  # Fetch the precomputed exact energy
+            energy_diff = min_lowest_energy - exact_energy 
 
-            # Compute the exact ground state energy
-            exact_energy = exact_gd_state_energy(model_input, backend.num_qubits, bonds)
+            # Replace non-positive values with a small positive value for LogNorm
+            if energy_diff <= 0:
+                energy_diff = 1e-10  # Small positive value
 
-            # Calculate the energy difference
-            energy_diff = exact_energy - lowest_energy
-
-            # Store the energy difference in the grid
             energy_diff_grid[j, i] = energy_diff
 
-    # Create the plot
+            # Ausgabe der Werte für jede Schleife
+            print(f"hx={hx_values[i]}, hz={hz_values[j]}, energy_diff={energy_diff}")
+
+    # Create the plot with a logarithmic color scale
     plt.figure(figsize=(6, 6))
     plt.imshow(energy_diff_grid, extent=[hx_values.min(), hx_values.max(), hz_values.min(), hz_values.max()],
-               origin='lower', cmap='jet', aspect='auto')
+               origin='lower', cmap='jet', aspect='auto', norm=mcolors.LogNorm(vmin=1e-4, vmax=1e-1))
 
     # Add color bar and labels
-    plt.colorbar(label='Energy Difference')
+    plt.colorbar(label='Energy Difference (log scale)')
     plt.xlabel('hx')
     plt.ylabel('hz')
-    plt.title('Energy Difference as function of hx and hz')
+    plt.title('Logarithmic Energy Difference as function of hx and hz')
 
     # Show the plot
     plt.show()
 
 
-# Global definitions for backend and bonds
-backend = FakeQuitoV2()  # FakeGuadalupeV2()
-bonds = [[0, 1], [1, 2], [1, 3], [3, 4]]  
+
 
 if __name__ == "__main__":
     main()
-    scan_hx_hz(backend, bonds)  # Pass backend and bonds as arguments
 
 

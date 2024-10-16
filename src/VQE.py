@@ -12,7 +12,6 @@ import concurrent.futures
 import matplotlib.colors as mcolors
 
 
-
 # Here VQE is done with SV simulator 
 def VQE_parameterized_circuit_sv(params =[],backend = FakeQuitoV2(),initial_layout = [0, 1, 2, 3, 4], num_layers = 1):
     """
@@ -64,11 +63,20 @@ def exact_gd_state_energy(model_input, num_qubits,bonds):
     return get_lowest_states(exact_ham, 1)[0][0]
 
 def main():
-    # Benutzereingabe für die Anzahl der Schichten (num_layers)
-    from sys import argv
-    num_layers = int(argv[1])
+    # Benutzerabfrage für die Anzahl der Schichten (num_layers)
+    while True:
+        try:
+            num_layers = int(input("Please enter the number of layers: "))
+            if num_layers > 0:
+                break
+            else:
+                print("The number of layers must be positive.")
+        except ValueError:
+            print("The number of layers must be an integer.")
+    
     print(f"Start optimizing with layer={num_layers}")
-    # update the phase space parameter below 
+    
+    # Update the phase space parameter below 
     J = -1.0
     hx = -1.0
     hz = 0.5
@@ -80,43 +88,46 @@ def main():
                    (13, 12), (12, 15), (1, 4), (4, 7), (7, 6), (7, 10), (10, 12)]
     # native connectivity of Quito backend
     bonds_Quito = [[0, 1],[1, 2],[1, 3],[3, 4]]
-    # there are three parameters for each layer in this VQE HVA ansatz 
+    
+    # Es gibt drei Parameter pro Schicht in diesem VQE HVA Ansatz
     num_params = 3 
 
-    # Chosing random parameters to perform VQE
-    init_params =  np.random.uniform(-np.pi/3, np.pi/3, num_layers*num_params)
+    # Generating random Parameter for VQE
+    init_params =  np.random.uniform(-np.pi/3, np.pi/3, num_layers * num_params)
         
-    # backend is chosen to decide the lattice geometry as well
-    # for the time being only Quito and Guadalupe geometries are implemented
-    # If you want to try a Guadalupe geometry change the backend to FakeGuadalupeV2() and bonds = bonds_Guad
-    backend = FakeQuitoV2()  # FakeGuadalupeV2() 
-    bonds = bonds_Quito # bonds_Guad 
+    # Choosing Backend 
+    backend = FakeQuitoV2()  # FakeGuadalupeV2()
+    bonds = bonds_Quito  # bonds_Guad 
 
-    init_VQE_circuit = VQE_parameterized_circuit_sv(params = init_params,backend = backend,
+    init_VQE_circuit = VQE_parameterized_circuit_sv(params = init_params, backend = backend,
                                        initial_layout = [i for i in range(backend.num_qubits)], 
                                        num_layers=num_layers)[0]
-    init_VQE_energy = VQE_energy(params = init_params,backend = backend,
+    init_VQE_energy = VQE_energy(params = init_params, backend = backend,
                                        initial_layout = [i for i in range(backend.num_qubits)], 
                                        bonds = bonds, num_layers=num_layers, model_input=model_input)
     
-    # for reference printing the intial starting point for the VQE calculations
-    print(f"Quantum circuit for randomly sample initial parameters: {init_params} with the corresponding VQE energy: {init_VQE_energy} is \n ", init_VQE_circuit)
+    # Initialen VQE-Zustand und Energie anzeigen
+    print(f"Quantum circuit for randomly sampled initial parameters: {init_params} with the corresponding VQE energy: {init_VQE_energy} is \n ", init_VQE_circuit)
 
-    # Optimzation step of VQE
-    optimal_params, lowest_energy = VQE_optimization_Step(init_params,backend = backend, initial_layout = [i for i in range(backend.num_qubits)], bonds=bonds, num_layers = num_layers, model_input=model_input)
+    # Optimierungsschritt
+    optimal_params, lowest_energy = VQE_optimization_Step(init_params, backend = backend, 
+                                                          initial_layout = [i for i in range(backend.num_qubits)], 
+                                                          bonds=bonds, num_layers=num_layers, 
+                                                          model_input=model_input)
 
-    # Printing the optimized parameters and the corresponding lowest obtained energy 
-    print(f"optimized parameters are {optimal_params} and obtained lowest energy is {lowest_energy}")  
+    # Optimierte Parameter und niedrigste Energie anzeigen
+    print(f"Optimized parameters are {optimal_params} and obtained lowest energy is {lowest_energy}")  
         
-    # below we printed the exact ground state energy of the hamiltonian 
-    print(f"Exact ground state energy: {exact_gd_state_energy(model_input,backend.num_qubits,bonds)}")
+    # Genau berechnete Grundzustandsenergie anzeigen
+    print(f"Exact ground state energy: {exact_gd_state_energy(model_input, backend.num_qubits, bonds)}")
     
-    # Calculate the difference between the exact ground state energy and the lowest calculated energy
+    # Differenz zwischen berechneter und exakter Energie berechnen und anzeigen
     energy_difference = lowest_energy - exact_gd_state_energy(model_input, backend.num_qubits, bonds)  
     print(f"The difference between the exact ground state energy and the calculated lowest energy is: {energy_difference}")
 
-    # Call scan_hx_hz within main, passing necessary parameters
+    # Optional: Aufruf der scan_hx_hz-Funktion
     scan_hx_hz(backend, bonds, num_layers, num_params)
+
 
 
 
@@ -189,7 +200,7 @@ def scan_hx_hz(backend, bonds, num_layers, num_params):
     # Create the plot with a logarithmic color scale
     plt.figure(figsize=(6, 6))
     plt.imshow(energy_diff_grid, extent=[hx_values.min(), hx_values.max(), hz_values.min(), hz_values.max()],
-               origin='lower', cmap='jet', aspect='auto', norm=mcolors.LogNorm(vmin=1e-4, vmax=1e-1))
+               origin='lower', cmap='jet', aspect='auto', norm=mcolors.LogNorm(vmin=1e-4, vmax=1e1))
 
     # Add color bar and labels
     plt.colorbar(label='Energy Difference (log scale)')
